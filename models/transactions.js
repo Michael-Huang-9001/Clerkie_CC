@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 let schema = new mongoose.Schema({
     trans_id: {
         type: String,
-        //unique: true,
+        unique: true,
         required: true
     },
     user_id: {
