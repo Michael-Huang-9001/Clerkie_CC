@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 let schema = new mongoose.Schema({
     trans_id: {
         type: String,
+        // Need unique for trans_id upsert
         unique: true,
         required: true
     },
@@ -18,6 +19,13 @@ let schema = new mongoose.Schema({
     },
     date: {
         type: Date
+    },
+    company: {
+        type: String
+    },
+    is_recurring: {
+        type: Boolean,
+        default: false
     }
 });
 
