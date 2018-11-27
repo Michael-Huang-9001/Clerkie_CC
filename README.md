@@ -20,7 +20,9 @@ The transaction upserts are determined by the transaction ID.
 Transactions are also grouped by the company of the transaction.
 
 Grouping by company assumes the transaction name is something like:
+
 [company_name] [company_name] ... [string with numbers]
+
 where the string of numbers is appended to the company name to distinguish unique transactions for that company.
 
 ## Checking recurrence
