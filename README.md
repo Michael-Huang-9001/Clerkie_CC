@@ -6,7 +6,10 @@ You'll also need MongoDB and Node.js installed.
 There is a POST endpoint and a GET at the root "/".
 
 ### GET @ /
-Returns a list of transactions, each containing an estimate of the next recurring transaction based on past recurring transactions, and 
+Returns a list of transactions, each containing an estimate of the next recurring transaction for a given company/transaction group based on past recurring transactions, and the list of past recurring transactions for that company.
+
+### POST @ /
+Accepts a list of transactions to be upserted, and returns the same results as the GET request.
 
 ## The server
 For POSTing, the server takes a list of transactions and upserts them into the database based on transaction_id.
