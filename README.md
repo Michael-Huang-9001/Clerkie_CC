@@ -5,6 +5,9 @@ You'll also need MongoDB and Node.js installed.
 
 There is a POST endpoint and a GET at the root "/".
 
+### GET @ /
+Returns a list of transactions, each containing an estimate of the next recurring transaction based on past recurring transactions, and 
+
 ## The server
 For POSTing, the server takes a list of transactions and upserts them into the database based on transaction_id.
 Then it calculates any recurring transactions based on the most recurring date increments, and accepts any transactions
@@ -26,6 +29,9 @@ Grouping by company assumes the transaction name is something like:
 where the string of numbers is appended to the company name to distinguish unique transactions for that company.
 
 ## Checking recurrence
-To check recurrence for a group of transactions, first calculate the time interval that appears the most often.
-Then using that most often recurring time interval, filter out any transactions that have similar time intervals.
-Then using the same most often recurring time interval, calculate the next recurring transaction using the last recurring date found in the list of trasnactions.
+To check recurrence in a group of transactions, first calculate the time interval that appears the most often. When calculating these time intervals, only consider time intervals whose transaction amounts are +- 20% from one another.
+
+Then using that most often recurring time interval, filter out any transactions that have similar time intervals and transaction amounts within 20% variance.
+
+Finally, using that same most often recurring time interval, calculate the next recurring transaction using the last recurring date found in the list of transactions.
+
