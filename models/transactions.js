@@ -23,10 +23,10 @@ let schema = new mongoose.Schema({
     company: {
         type: String
     },
-    is_recurring: {
-        type: Boolean,
-        default: false
-    }
+    // is_recurring: {
+    //     type: Boolean,
+    //     default: false
+    // }
 });
 
 let Transaction = mongoose.model("Transaction", schema);

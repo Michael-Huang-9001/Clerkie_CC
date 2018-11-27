@@ -2,9 +2,8 @@ const express = require('express');
 const bodyparser = require('body-parser');
 const mongoose = require('mongoose');
 const db_config = require('./config/db');
-const moment = require('moment');
 
-const TIME_DELTA = 2; // 2 days delta allowed
+const TIME_DELTA = 0.2; // 20% delta allowed
 const AMOUNT_DELTA = 0.2; // 20% delta multiplier allowed
 
 // App setup
@@ -30,6 +29,7 @@ mongoose.connect(
 
 /** 
  * Gets the transaction group name (e.g. All txs from Walmart)
+ * Assumes there's a number in the last phrase if it has something after the company name
 */
 async function getTxGroup(tx) {
     let company_name = tx.name;
@@ -46,7 +46,9 @@ async function getTxGroup(tx) {
  *  Upserts post data to DB
 */
 async function upsert(body) {
-    // This assumes the batch of upserts are all from the same user_id, name
+    // This assumes the batch of upserts are all from the same user_id
+    // An auth filter can take care of user ID authentication and further filtering
+
     /*
     - trans_id: Unique identifier for the given transaction (String)
     - user_id: Unique identifier of the user sending the request (String)
@@ -71,13 +73,6 @@ async function upsert(body) {
  * Function that estimates the next recurring payment and gives a list of past recurring transactions
  */
 async function recur() {
-    /*
-    - name: Exact name of the most recent transaction (String)
-    - user_id: Same as above (String)
-    - next_amt: Estimated amount of the next transaction (Number)
-    - next_date: Estimated date of the next transaction (Date)
-    - transactions: All transactions that are part of this recurring transaction group (Array of transactions)
-    */
 
     let table = {};
     let results = await Transaction.find({}).sort({ company: 1, date: 1, name: 1 }).lean(); // Oldest date first
@@ -94,115 +89,102 @@ async function recur() {
     let result = [];
 
     for (let key in table) {
-        await calculateRecurrence(table[key]);
-        result.push(await calculateNextPayment(table[key]));
+        let predicted_tx = await calculateRecurrence(table[key]);
+        result.push(predicted_tx);
     }
-
 
     return result;
 }
 
 /**
+ * Performs 3 checks:
+ * 1. Finds all intervals between dates and track how many times they occur
+ * 2. Find the most recurring interval
+ * 3. Find all txs that match the time interval
  * 
+ * Might be incredible inefficient to do this for all companies/tx groups
  * @param {*} table The table keys are the tx_groups/companies
  */
 function calculateRecurrence(tx_group) {
-    // Should I only consider recurrence after 3 or more txs?
-    if (tx_group.length < 3) {
-        return;
-    }
 
-    let prev_timestamp = '';
-    let prev_interval = 0;
-    let interval_in_days = 0;
+    let possible_recurring_times = {};
 
-    let prev_amount = 0;
-
-    for (let i = 0; i < tx_group.length; i++) {
+    // This nested for loop gets all of the time increments found within the company
+    for (let i = 0; i < tx_group.length - 1; i++) {
         let tx = tx_group[i];
+        for (let j = i + 1; j < tx_group.length; j++) {
+            let next_tx = tx_group[j];
+            let days_diff = dateDifference(tx.date, next_tx.date); // Calcs difference of dates in days
+            //console.log(`${tx.date.toISOString()} vs ${next_tx.date.toISOString()} : ${days_diff}`);
 
-        //console.log(`current: ${tx.name}`)
-        let is_recurring_time = false;
-        let is_recurring_amount = false;
+            // Adds the date increment if the amounts are within +- 20%
+            if (amountDifference(tx.amount, next_tx.amount)) {
+                let estimated_interval = Math.round(days_diff);
 
-        if (!prev_timestamp) {
-            prev_timestamp = tx.date;
-        } else {
-            // Get interval between current and prev tx
-            interval_in_days = dateDifference(prev_timestamp, tx.date);
+                // Adjust for months with 31 days for more roundness, may not be good in practice
+                // if (estimated_interval == 31) {
+                //     estimated_interval = 30;
+                // }
 
-            // Time delta calc
-            {
-                if (!prev_interval) {
-                    prev_interval = interval_in_days;
-                }
-
-                let interval_min = prev_interval - TIME_DELTA; // Interval - 2days, implying it came 2 days early
-                let interval_max = prev_interval + TIME_DELTA; // Interval + 2 days, implying it came 2 days late
-
-                if (interval_in_days > interval_min && interval_in_days < interval_max) {
-                    is_recurring_time = true;
+                // Increment interval occurances
+                if (possible_recurring_times[estimated_interval]) {
+                    possible_recurring_times[estimated_interval] += 1;
+                } else {
+                    possible_recurring_times[estimated_interval] = 1;
                 }
             }
         }
-
-        if (!prev_amount) {
-            prev_amount = tx.amount;
-        } else {
-            if (amountDifference(prev_amount, tx.amount)) {
-                is_recurring_amount = true;
-            }
-        }
-
-        if (is_recurring_time && is_recurring_amount) {
-            tx_group[i - 1].is_recurring = true;
-            tx_group[i].is_recurring = true;
-        }
-
-        prev_amount = tx.amount;
-        prev_timestamp = tx.date;
     }
-}
 
-/**
- * Calculates the next payment for in the company/tx group
- */
-function calculateNextPayment(tx_group) {
-    //console.log(tx_group);
+    // Grabs the interval that appears the most often
+    let recurring_interval = 0;
+    let most_occurances = 0;
+    for (let interval in possible_recurring_times) {
+        //console.log(`${interval} days detected ${possible_recurring_times[interval]} times`)
+        if (possible_recurring_times[interval] > most_occurances) {
+            most_occurances = possible_recurring_times[interval];
+            recurring_interval = interval;
+        }
+    }
 
-    if (!tx_group.length) {
+    //console.log(`Most recurring interval: ${recurring_interval} days`);
+
+    if (!recurring_interval && !most_occurances) {
+        // No recurrences detected
         return {};
     }
 
     let recurring = [];
-    let prev_tx = null;
-    let prev_timestamp = '';
-    let amount = 0;
-    let interval_in_days = 0;
-    let recurring_count = 0;
 
-    for (let tx of tx_group) {
-        if (tx.is_recurring) {
-            recurring_count++;
-            amount += tx.amount;
-            if (!prev_tx) {
-                prev_timestamp = tx.date;
-            } else {
-                interval_in_days += dateDifference(prev_timestamp, tx.date);
+    // Find dates with interval that matches the most recurring interval
+    for (let i = 0; i < tx_group.length - 1; i++) {
+        let tx = tx_group[i];
+        for (let j = i + 1; j < tx_group.length; j++) {
+            let next_tx = tx_group[j];
+            let days_diff = dateDifference(tx.date, next_tx.date);
+
+            let time_max = recurring_interval * (1 + TIME_DELTA); // Interval + 20%
+            let time_min = recurring_interval * (1 - TIME_DELTA); // Interval - 20%
+
+            // Amount within tolerance and time interval within tolerance
+            if (amountDifference(tx.amount, next_tx.amount) && days_diff > time_min && days_diff < time_max) {
+                tx_group[i].is_recurring = true;
+                recurring.push(tx);
+                if (j == tx_group.length - 1) { // next is the last element and is recurring
+                    tx_group[j].is_recurring = true;
+                    recurring.push(next_tx);
+                }
+
+                i = j - 1;
+                break;
             }
-
-            prev_tx = tx;
-            prev_timestamp = tx.date;
-            recurring.push(tx);
         }
     }
 
-    if (recurring_count) {
-        interval_in_days = Math.round(interval_in_days / recurring_count);
-        amount /= recurring_count;
+    //console.log(recurring);
 
-        prev_timestamp = new Date(Date.parse(prev_timestamp) + interval_in_days * 24 * 60 * 60 * 1000);
-    }
+    // To save further work, maybe we can upsert the txs that have been identified as recurring
+    // to avoid calculating its recurrence in the future.
 
     /*
     - name: Exact name of the most recent transaction (String)
@@ -212,22 +194,27 @@ function calculateNextPayment(tx_group) {
     - transactions: All transactions that are part of this recurring transaction group (Array of transactions)
     */
 
-    return {
-        name: (prev_tx) ? prev_tx.name : '',
-        user_id: (prev_tx) ? prev_tx.user_id : '',
-        next_amt: amount,
-        next_date: prev_timestamp,
-        transaction: recurring
-    };
+    let predict_next_tx = {};
+    if (recurring.length) {
+        let most_recent_tx = recurring[recurring.length - 1];
+        predict_next_tx.name = most_recent_tx.name;
+        predict_next_tx.user_id = most_recent_tx.user_id;
+        predict_next_tx.next_amt = most_recent_tx.amount;
+
+        let next_date = new Date(most_recent_tx.date);
+        next_date.setTime(next_date.getTime() + (86400000 * recurring_interval));
+        predict_next_tx.next_date = next_date;
+
+        predict_next_tx.transactions = recurring;
+    }
+    return predict_next_tx;
 }
 
 /**
  * Helper function that gets the number of days between timestamps
  */
 function dateDifference(date_a, date_b) {
-    // let diff = Math.abs(date_a - date_b);
-    // return diff < 172800000; // 2 days
-    return Math.abs(moment(date_a).diff(moment(date_b), 'days'));
+    return Math.abs(date_a - date_b) / 86400000; // 86400000 is 1 day in milliseconds
 }
 
 /**
@@ -246,9 +233,9 @@ function amountDifference(prev_amount, current_amount) {
  * Root GET path, gets recurring txs
  */
 app.get('/', (req, res) => {
-    recur().then((r) => {
-        console.log(r);
-        res.json(r);
+    recur().then((result) => {
+        //console.log(JSON.stringify(r));
+        res.json(result);
     });
 });
 
@@ -259,9 +246,9 @@ app.post('/', (req, res) => {
     upsert(req.body)
         .then(() => {
             return recur();
-        }).then((recur) => {
-            console.log(recur)
-            res.json(recur);
+        }).then((results) => {
+            //console.log(JSON.stringify(results));
+            res.json(results);
         })
 });
 
