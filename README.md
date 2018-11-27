@@ -1,6 +1,7 @@
 # Clerkie Backend Coding Challenge
 
 To run this program, you'll need to install any dependencies it may need.
+You'll also need MongoDB and Node.js installed.
 
 1. npm i
 2. node app.js
